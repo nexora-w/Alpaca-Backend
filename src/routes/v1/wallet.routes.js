@@ -11,6 +11,7 @@ router.post('/encrypt', walletController.encryptWallet);
 router.post('/decrypt', walletController.decryptWallet);
 router.get('/balance/:address', walletController.getAccountBalance);
 router.get('/info/:address', walletController.getAccountInfo);
+router.get('/pools', walletController.getPools);
 
 module.exports = router;
 
