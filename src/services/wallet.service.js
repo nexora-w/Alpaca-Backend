@@ -3,15 +3,6 @@ const crypto = require('crypto');
 const bip39 = require('bip39');
 const logger = require('../utils/logger');
 
-const poolsEndpoint = process.env.KEETANET_POOLS_ENDPOINT || 'https://static.network.keeta.com/api/pools';
-const fetchFn = async (...args) => {
-  if (typeof fetch !== 'undefined') {
-    return fetch(...args);
-  }
-  const { default: nodeFetch } = await import('node-fetch');
-  return nodeFetch(...args);
-};
-
 /**
  * Generate a new wallet using KeetaNet SDK with BIP39 mnemonic phrase
  * @returns {Object} Wallet object with mnemonic, seed, publicKey, and address
@@ -318,48 +309,6 @@ const getAccountInfo = async (address) => {
   }
 };
 
-/**
- * Get pool data from KeetaNet static API
- * @returns {Array} Pools with name, image, price, and volume
- */
-const getPools = async () => {
-  try {
-    const response = await fetchFn(poolsEndpoint, {
-      headers: {
-        'Accept': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      const error = new Error(`Failed to fetch pools: ${response.status}`);
-      error.status = response.status;
-      throw error;
-    }
-
-    const payload = await response.json();
-    const poolsArray = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
-
-    const pools = poolsArray.map((pool) => ({
-      id: pool.id || pool.address || pool.contract || pool.name,
-      name: pool.name || pool.symbol || 'Unknown pool',
-      image: pool.image || pool.logo || pool.icon || null,
-      price: Number(pool.priceUsd ?? pool.price ?? pool.tokenPrice ?? 0),
-      volume: Number(pool.volume24h ?? pool.volumeUsd ?? pool.volume ?? 0),
-      raw: pool,
-    }));
-
-    return pools;
-  } catch (error) {
-    logger.error({ error }, 'Error fetching pools');
-    if (error.status) {
-      throw error;
-    }
-    const httpError = new Error('Failed to fetch pools: ' + error.message);
-    httpError.status = 500;
-    throw httpError;
-  }
-};
-
 module.exports = {
   createWallet,
   importWalletFromSeed,
@@ -369,6 +318,5 @@ module.exports = {
   decryptWalletData,
   getAccountBalance,
   getAccountInfo,
-  getPools,
 };
 

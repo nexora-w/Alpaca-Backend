@@ -215,23 +215,6 @@ const getAccountInfo = async (req, res, next) => {
   }
 };
 
-/**
- * Get pools information
- */
-const getPools = async (req, res, next) => {
-  try {
-    const pools = await walletService.getPools();
-
-    res.status(200).json({
-      success: true,
-      data: pools,
-      message: 'Pools fetched successfully',
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
 module.exports = {
   createWallet,
   importWalletFromSeed,
@@ -241,6 +224,5 @@ module.exports = {
   decryptWallet,
   getAccountBalance,
   getAccountInfo,
-  getPools,
 };
 
