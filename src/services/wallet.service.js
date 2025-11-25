@@ -23,9 +23,12 @@ const createWallet = () => {
     // Create an account using the generated seed (index 0)
     const account = KeetaNet.lib.Account.fromSeed(seed, 0);
     
+    const privateKey = seed; // In KeetaNet we treat the 32-byte seed as the deterministic private key
+
     return {
       mnemonic: mnemonic, // 24-word mnemonic phrase
       seed: seed, // Hex seed derived from mnemonic (256 bits)
+      privateKey: privateKey,
       publicKey: account.publicKeyString.toString(),
       address: account.publicKeyString.toString(), // In KeetaNet, public key serves as address
     };
@@ -54,6 +57,7 @@ const importWalletFromSeed = (seed) => {
     const account = KeetaNet.lib.Account.fromSeed(seed.trim(), 0);
     
     return {
+      privateKey: seed.trim(),
       publicKey: account.publicKeyString.toString(),
       address: account.publicKeyString.toString(), // In KeetaNet, public key serves as address
     };
@@ -97,6 +101,7 @@ const importWalletFromMnemonic = (mnemonic) => {
     const account = KeetaNet.lib.Account.fromSeed(seed, 0);
     
     return {
+      privateKey: seed,
       publicKey: account.publicKeyString.toString(),
       address: account.publicKeyString.toString(),
     };
@@ -127,9 +132,11 @@ const importWalletFromPrivateKey = (privateKey) => {
 
     // In KeetaNet, we primarily use seeds. For private key import,
     // we'll treat it as a seed string
-    const account = KeetaNet.lib.Account.fromSeed(privateKey.trim(), 0);
+    const normalizedKey = privateKey.trim();
+    const account = KeetaNet.lib.Account.fromSeed(normalizedKey, 0);
     
     return {
+      privateKey: normalizedKey,
       publicKey: account.publicKeyString.toString(),
       address: account.publicKeyString.toString(),
     };

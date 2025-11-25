@@ -12,6 +12,7 @@ const createWallet = (req, res, next) => {
       data: {
         address: wallet.address,
         publicKey: wallet.publicKey,
+        privateKey: wallet.privateKey || wallet.seed,
         mnemonic: wallet.mnemonic, // BIP39 mnemonic phrase (12 words)
         seed: wallet.seed, // Hex seed derived from mnemonic (for backward compatibility)
         // Note: Both mnemonic and seed are sensitive and should be encrypted before storage
@@ -45,6 +46,7 @@ const importWalletFromSeed = (req, res, next) => {
       data: {
         address: wallet.address,
         publicKey: wallet.publicKey,
+        privateKey: wallet.privateKey || null,
       },
       message: 'Wallet imported successfully',
     });
@@ -74,6 +76,7 @@ const importWalletFromMnemonic = (req, res, next) => {
       data: {
         address: wallet.address,
         publicKey: wallet.publicKey,
+        privateKey: wallet.privateKey || null,
       },
       message: 'Wallet imported successfully',
     });
@@ -103,6 +106,7 @@ const importWalletFromPrivateKey = (req, res, next) => {
       data: {
         address: wallet.address,
         publicKey: wallet.publicKey,
+        privateKey: wallet.privateKey || null,
       },
       message: 'Wallet imported successfully',
     });
