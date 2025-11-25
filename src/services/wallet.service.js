@@ -1,6 +1,7 @@
 const KeetaNet = require('@keetanetwork/keetanet-client');
 const crypto = require('crypto');
 const bip39 = require('bip39');
+const https = require('https');
 const logger = require('../utils/logger');
 
 /**
@@ -207,6 +208,49 @@ const decryptWalletData = (encryptedData, password) => {
 };
 
 /**
+ * Lightweight helper around https.get to retrieve JSON payloads.
+ * Keeps dependencies small while supporting the remote ledger API.
+ */
+const fetchJson = (url) => new Promise((resolve, reject) => {
+  const request = https.get(url, (response) => {
+    if (response.statusCode && response.statusCode >= 400) {
+      reject(new Error(`Ledger API request failed with status ${response.statusCode}`));
+      response.resume();
+      return;
+    }
+
+    let data = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk) => {
+      data += chunk;
+    });
+    response.on('end', () => {
+      try {
+        resolve(JSON.parse(data));
+      } catch (parseError) {
+        reject(new Error('Failed to parse ledger API response'));
+      }
+    });
+  });
+
+  request.on('error', (err) => reject(err));
+  request.end();
+});
+
+const hexToDecimalString = (hexValue) => {
+  if (!hexValue) {
+    return '0';
+  }
+
+  try {
+    return BigInt(hexValue).toString();
+  } catch (error) {
+    logger.warn({ error, hexValue }, 'Failed to convert hex balance, returning raw string');
+    return typeof hexValue === 'string' ? hexValue : '0';
+  }
+};
+
+/**
  * Get account balance and tokens
  * @param {string} address - The account address (public key)
  * @returns {Object} Account balance and token information
@@ -219,57 +263,44 @@ const getAccountBalance = async (address) => {
       throw error;
     }
 
-    // Initialize KeetaNet UserClient
-    // Note: Configure with your actual network endpoint
-    const networkEndpoint = process.env.KEETANET_ENDPOINT || 'https://api.keeta.network';
-    
-    const client = await new KeetaNet.lib.UserClientBuilder()
-      .withNetworkEndpoint(networkEndpoint)
-      .build();
+    const normalizedAddress = address.trim();
+    const ledgerEndpoint = process.env.KEETANET_LEDGER_ENDPOINT
+      || 'https://rep3.main.network.api.keeta.com/api/node/ledger';
+    const url = `${ledgerEndpoint.replace(/\/$/, '')}/account/${encodeURIComponent(normalizedAddress)}/balance`;
 
-    // Get account state
-    const accountState = await client.getAccountState(address.trim());
-    
-    // Extract balance and token information
-    // KeetaNet uses balances object where keys are token addresses
-    const balances = accountState.balances || {};
-    const tokens = Object.keys(balances).map(tokenAddress => ({
-      address: tokenAddress,
-      balance: balances[tokenAddress]?.toString() || '0',
-    }));
+    const ledgerResponse = await fetchJson(url);
 
-    // Calculate total balance (sum of all token balances)
-    const totalBalance = Object.values(balances).reduce((sum, balance) => {
-      const balanceValue = typeof balance === 'string' ? parseFloat(balance) : (balance || 0);
-      return sum + (isNaN(balanceValue) ? 0 : balanceValue);
-    }, 0);
+    const tokens = (ledgerResponse.balances || []).map((tokenBalance) => {
+      const balanceHex = tokenBalance.balance || '0x0';
+      return {
+        token: tokenBalance.token,
+        balanceHex,
+        balance: hexToDecimalString(balanceHex),
+      };
+    });
+
+    const totalBalance = tokens.reduce((sum, tokenEntry) => {
+      try {
+        return sum + BigInt(tokenEntry.balance);
+      } catch {
+        return sum;
+      }
+    }, 0n).toString();
 
     return {
-      address: address.trim(),
-      balances: balances,
-      tokens: tokens,
-      totalBalance: totalBalance,
+      address: normalizedAddress,
+      tokens,
+      totalBalance,
+      raw: ledgerResponse,
     };
   } catch (error) {
-    logger.error({ error, address }, 'Error getting account balance');
-    
-    // If SDK fails, return empty data structure for now
-    // In production, you'd want proper error handling
-    if (error.message && error.message.includes('network') || error.message.includes('connection')) {
-      // Return empty structure if network error
-      return {
-        address: address.trim(),
-        balances: {},
-        tokens: [],
-        totalBalance: 0,
-      };
-    }
-    
+    logger.error({ error, address }, 'Error getting account balance from ledger API');
+
     if (error.status) {
       throw error;
     }
     const httpError = new Error('Failed to get account balance: ' + error.message);
-    httpError.status = 500;
+    httpError.status = 502;
     throw httpError;
   }
 };

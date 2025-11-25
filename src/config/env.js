@@ -12,7 +12,7 @@ const config = {
   env,
   isDev: env === 'development',
   isProd: env === 'production',
-  port: parseInt(process.env.PORT, 10) || 4000,
+  port: parseInt(process.env.PORT, 10) || 7060,
   logging: {
     level: process.env.LOG_LEVEL || (env === 'development' ? 'debug' : 'info'),
   },
