@@ -219,6 +219,53 @@ const getAccountInfo = async (req, res, next) => {
   }
 };
 
+/**
+ * Create a fungible token backed by the caller's seed
+ */
+const createToken = async (req, res, next) => {
+  try {
+    const {
+      seed,
+      name,
+      symbol,
+      description,
+      initialSupply,
+      metadata,
+      network,
+    } = req.body || {};
+
+    if (!seed || !name || !symbol || !initialSupply) {
+      return res.status(400).json({
+        success: false,
+        message: 'Seed, name, symbol, and initial supply are required',
+      });
+    }
+
+    const tokenData = await walletService.createToken({
+      seed,
+      name,
+      symbol,
+      description,
+      initialSupply,
+      metadata,
+      network,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: tokenData,
+      message: 'Token created successfully',
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    res.status(status).json({
+      success: false,
+      code: error.code || 'TOKEN_CREATE_ERROR',
+      message: error.message || 'Unable to create token',
+    });
+  }
+};
+
 module.exports = {
   createWallet,
   importWalletFromSeed,
@@ -228,5 +275,6 @@ module.exports = {
   decryptWallet,
   getAccountBalance,
   getAccountInfo,
+  createToken,
 };
 

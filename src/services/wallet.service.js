@@ -4,6 +4,14 @@ const bip39 = require('bip39');
 const https = require('https');
 const logger = require('../utils/logger');
 
+const DEFAULT_NETWORK = process.env.KEETANET_NETWORK || 'test';
+const NETWORK_ENDPOINT = process.env.KEETANET_ENDPOINT || 'https://api.keeta.network';
+const LEDGER_ENDPOINT = process.env.KEETANET_LEDGER_ENDPOINT
+  || 'https://rep3.main.network.api.keeta.com/api/node/ledger';
+
+const TOKEN_NAME_REGEX = /^[A-Z_]{1,50}$/;
+const TOKEN_SYMBOL_REGEX = /^[A-Z0-9_]{1,16}$/;
+
 /**
  * Generate a new wallet using KeetaNet SDK with BIP39 mnemonic phrase
  * @returns {Object} Wallet object with mnemonic, seed, publicKey, and address
@@ -250,6 +258,79 @@ const hexToDecimalString = (hexValue) => {
   }
 };
 
+const normalizeBigIntInput = (value, label) => {
+  try {
+    const castValue = typeof value === 'string' ? value.trim() : value;
+    const bigint = BigInt(castValue);
+
+    if (bigint <= 0n) {
+      const error = new Error(`${label} must be greater than zero`);
+      error.status = 400;
+      throw error;
+    }
+
+    return bigint;
+  } catch (error) {
+    if (!error.status) {
+      const formattedError = new Error(`Invalid ${label}: must be a whole number`);
+      formattedError.status = 400;
+      throw formattedError;
+    }
+    throw error;
+  }
+};
+
+const normalizeBuilderFriendlyError = (error) => {
+  const response = {
+    status: 500,
+    message: 'Unexpected error while creating token',
+    code: error?.code,
+  };
+
+  const message = error?.message || error?.toString() || '';
+
+  if (/name does not fit proper format/i.test(message)) {
+    return {
+      status: 400,
+      message: 'Token name must use uppercase letters or underscores (max 50 chars).',
+      code: 'TOKEN_NAME_INVALID',
+    };
+  }
+
+  if (/symbol does not fit proper format/i.test(message)) {
+    return {
+      status: 400,
+      message: 'Token symbol must be uppercase alphanumeric or underscore (max 16 chars).',
+      code: 'TOKEN_SYMBOL_INVALID',
+    };
+  }
+
+  if (/resulting balance becomes negative/i.test(message)) {
+    return {
+      status: 400,
+      message: 'Insufficient base token balance to pay the creation fee. Receive more funds and try again.',
+      code: 'INSUFFICIENT_FUNDS',
+    };
+  }
+
+  if (error?.code === 'NETWORK_TIMEOUT') {
+    return {
+      status: 504,
+      message: 'KeetaNet representatives did not respond in time. Please retry.',
+      code: 'NETWORK_TIMEOUT',
+    };
+  }
+
+  if (error?.status && error.status >= 400 && error.status < 500) {
+    return {
+      status: error.status,
+      message,
+      code: error.code,
+    };
+  }
+
+  return response;
+};
 /**
  * Get account balance and tokens
  * @param {string} address - The account address (public key)
@@ -264,9 +345,7 @@ const getAccountBalance = async (address) => {
     }
 
     const normalizedAddress = address.trim();
-    const ledgerEndpoint = process.env.KEETANET_LEDGER_ENDPOINT
-      || 'https://rep3.main.network.api.keeta.com/api/node/ledger';
-    const url = `${ledgerEndpoint.replace(/\/$/, '')}/account/${encodeURIComponent(normalizedAddress)}/balance`;
+    const url = `${LEDGER_ENDPOINT.replace(/\/$/, '')}/account/${encodeURIComponent(normalizedAddress)}/balance`;
 
     const ledgerResponse = await fetchJson(url);
 
@@ -319,10 +398,8 @@ const getAccountInfo = async (address) => {
     }
 
     // Initialize KeetaNet UserClient
-    const networkEndpoint = process.env.KEETANET_ENDPOINT || 'https://api.keeta.network';
-    
     const client = await new KeetaNet.lib.UserClientBuilder()
-      .withNetworkEndpoint(networkEndpoint)
+      .withNetworkEndpoint(NETWORK_ENDPOINT)
       .build();
 
     // Get account state
@@ -347,6 +424,119 @@ const getAccountInfo = async (address) => {
   }
 };
 
+/**
+ * Create a fungible token on the selected KeetaNet network
+ * @param {Object} options
+ * @param {string} options.seed - Hex seed/private key for signer
+ * @param {string} options.name - Human readable name
+ * @param {string} options.symbol - Symbol or ticker
+ * @param {string|number|bigint} options.initialSupply - Total supply to mint
+ * @param {string} [options.description] - Optional description
+ * @param {Object} [options.metadata] - Additional metadata to embed
+ * @returns {Promise<Object>} Token creation result
+ */
+const createToken = async ({
+  seed,
+  name,
+  symbol,
+  initialSupply,
+  description,
+  metadata = {},
+  network,
+}) => {
+  try {
+    if (!seed || typeof seed !== 'string' || seed.trim().length === 0) {
+      const error = new Error('Seed is required to sign transactions');
+      error.status = 400;
+      throw error;
+    }
+
+    if (!name || !symbol) {
+      const error = new Error('Token name and symbol are required');
+      error.status = 400;
+      throw error;
+    }
+
+    if (!TOKEN_NAME_REGEX.test(name)) {
+      const error = new Error('Token name must use uppercase letters or underscores (max 50 chars).');
+      error.status = 400;
+      throw error;
+    }
+
+    if (!TOKEN_SYMBOL_REGEX.test(symbol)) {
+      const error = new Error('Token symbol must be uppercase letters, numbers, or underscores (max 16 chars).');
+      error.status = 400;
+      throw error;
+    }
+
+    const signerSeed = seed.trim();
+    const supplyBigInt = normalizeBigIntInput(initialSupply, 'initial supply');
+    const signerAccount = KeetaNet.lib.Account.fromSeed(signerSeed, 0);
+
+    const clientOptions = NETWORK_ENDPOINT ? { networkEndpoint: NETWORK_ENDPOINT } : undefined;
+    const targetNetwork = network || DEFAULT_NETWORK;
+    const client = KeetaNet.UserClient.fromNetwork(targetNetwork, signerAccount, clientOptions);
+
+    const builder = client.initBuilder();
+    builder.updateAccounts({
+      account: signerAccount,
+      signer: signerAccount,
+    });
+
+    const tokenAccount = builder.generateIdentifier(
+      KeetaNet.lib.Account.AccountKeyAlgorithm.TOKEN,
+      {
+        account: signerAccount,
+        signer: signerAccount,
+      }
+    );
+
+    // Compute once so token address is available for subsequent operations
+    await client.computeBuilderBlocks(builder);
+
+    builder.modifyTokenSupply(supplyBigInt, { account: tokenAccount.account });
+
+    const safeMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+
+    const metadataPayload = {
+      name,
+      symbol,
+      description,
+      ...safeMetadata,
+    };
+
+    const base64Metadata = Buffer.from(JSON.stringify(metadataPayload), 'utf8')
+      .toString('base64');
+
+    builder.setInfo({
+      name,
+      description: description || `${symbol} token created via Alpaca Wallet`,
+      metadata: base64Metadata,
+      defaultPermission: new KeetaNet.lib.Permissions(['ACCESS'], []),
+    }, {
+      account: tokenAccount.account,
+    });
+
+    const computed = await client.computeBuilderBlocks(builder);
+    const publishResult = await client.publishBuilder(builder);
+
+    return {
+      tokenAddress: tokenAccount.account.publicKeyString.get(),
+      initialSupply: supplyBigInt.toString(),
+      blocks: computed.blocks,
+      publish: publishResult,
+    };
+  } catch (error) {
+    const normalized = normalizeBuilderFriendlyError(error);
+    logger.error({ error }, 'Error creating Keeta token');
+
+    const httpError = new Error(normalized.message);
+    httpError.status = normalized.status;
+    httpError.code = normalized.code;
+    throw httpError;
+  }
+};
+
 module.exports = {
   createWallet,
   importWalletFromSeed,
@@ -356,5 +546,6 @@ module.exports = {
   decryptWalletData,
   getAccountBalance,
   getAccountInfo,
+  createToken,
 };
 

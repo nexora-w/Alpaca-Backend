@@ -9,6 +9,7 @@ router.post('/import/mnemonic', walletController.importWalletFromMnemonic);
 router.post('/import/private-key', walletController.importWalletFromPrivateKey);
 router.post('/encrypt', walletController.encryptWallet);
 router.post('/decrypt', walletController.decryptWallet);
+router.post('/token/create', walletController.createToken);
 router.get('/balance/:address', walletController.getAccountBalance);
 router.get('/info/:address', walletController.getAccountInfo);
 
