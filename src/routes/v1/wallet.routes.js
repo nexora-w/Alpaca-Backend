@@ -10,6 +10,7 @@ router.post('/import/private-key', walletController.importWalletFromPrivateKey);
 router.post('/encrypt', walletController.encryptWallet);
 router.post('/decrypt', walletController.decryptWallet);
 router.post('/token/create', walletController.createToken);
+router.post('/transfer', walletController.transferTokens);
 router.get('/balance/:address', walletController.getAccountBalance);
 router.get('/info/:address', walletController.getAccountInfo);
 

@@ -266,6 +266,44 @@ const createToken = async (req, res, next) => {
   }
 };
 
+/**
+ * Transfer tokens using KeetaNet send operation
+ */
+const transferTokens = async (req, res, next) => {
+  try {
+    const {
+      seed,
+      recipient,
+      amount,
+      tokenAddress,
+      network,
+    } = req.body || {};
+
+    if (!seed || !recipient || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Seed, recipient, and amount are required',
+      });
+    }
+
+    const transferResult = await walletService.transferTokens({
+      seed,
+      recipient,
+      amount,
+      tokenAddress,
+      network,
+    });
+
+    res.status(200).json({
+      success: true,
+      data: transferResult,
+      message: 'Transfer submitted successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createWallet,
   importWalletFromSeed,
@@ -276,5 +314,6 @@ module.exports = {
   getAccountBalance,
   getAccountInfo,
   createToken,
+  transferTokens,
 };
 

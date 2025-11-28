@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const bip39 = require('bip39');
 const https = require('https');
 const logger = require('../utils/logger');
+const { serializeBigInt } = require('../utils/bigint-serializer');
 
 const DEFAULT_NETWORK = process.env.KEETANET_NETWORK || 'test';
 const NETWORK_ENDPOINT = process.env.KEETANET_ENDPOINT || 'https://api.keeta.network';
@@ -331,6 +332,56 @@ const normalizeBuilderFriendlyError = (error) => {
 
   return response;
 };
+
+const normalizeTransferError = (error) => {
+  const defaultResponse = {
+    status: 500,
+    message: 'Failed to transfer tokens. Please try again.',
+    code: error?.code || 'TRANSFER_FAILED',
+  };
+
+  const message = error?.message || '';
+
+  if (/insufficient/i.test(message) || /resulting balance becomes negative/i.test(message)) {
+    return {
+      status: 400,
+      message: 'Insufficient balance to complete this transfer.',
+      code: 'INSUFFICIENT_FUNDS',
+    };
+  }
+
+  if (/account/i.test(message) && /not found/i.test(message)) {
+    return {
+      status: 404,
+      message: 'One of the accounts involved could not be found on the network.',
+      code: 'ACCOUNT_NOT_FOUND',
+    };
+  }
+
+  if (/network timeout/i.test(message)) {
+    return {
+      status: 504,
+      message: 'KeetaNet representatives did not respond in time. Please retry.',
+      code: 'NETWORK_TIMEOUT',
+    };
+  }
+
+  if (error?.status && error.status >= 400 && error.status < 500) {
+    return {
+      status: error.status,
+      message,
+      code: error.code,
+    };
+  }
+
+  return defaultResponse;
+};
+
+const getUserClient = (signerAccount, network) => {
+  const clientOptions = NETWORK_ENDPOINT ? { networkEndpoint: NETWORK_ENDPOINT } : undefined;
+  const targetNetwork = network || DEFAULT_NETWORK;
+  return KeetaNet.UserClient.fromNetwork(targetNetwork, signerAccount, clientOptions);
+};
 /**
  * Get account balance and tokens
  * @param {string} address - The account address (public key)
@@ -366,12 +417,16 @@ const getAccountBalance = async (address) => {
       }
     }, 0n).toString();
 
-    return {
+    // Serialize the response to convert any BigInt values to strings
+    const response = {
       address: normalizedAddress,
       tokens,
       totalBalance,
       raw: ledgerResponse,
     };
+
+    // Recursively serialize all BigInt values to strings for JSON compatibility
+    return serializeBigInt(response);
   } catch (error) {
     logger.error({ error, address }, 'Error getting account balance from ledger API');
 
@@ -520,15 +575,119 @@ const createToken = async ({
     const computed = await client.computeBuilderBlocks(builder);
     const publishResult = await client.publishBuilder(builder);
 
-    return {
+    // Serialize the response to convert any BigInt values to strings
+    const response = {
       tokenAddress: tokenAccount.account.publicKeyString.get(),
       initialSupply: supplyBigInt.toString(),
       blocks: computed.blocks,
       publish: publishResult,
     };
+
+    // Recursively serialize all BigInt values to strings for JSON compatibility
+    return serializeBigInt(response);
   } catch (error) {
     const normalized = normalizeBuilderFriendlyError(error);
     logger.error({ error }, 'Error creating Keeta token');
+
+    const httpError = new Error(normalized.message);
+    httpError.status = normalized.status;
+    httpError.code = normalized.code;
+    throw httpError;
+  }
+};
+
+/**
+ * Transfer tokens using the KeetaNet send operation
+ * @param {Object} options
+ * @param {string} options.seed - Hex seed/private key for signer
+ * @param {string} options.recipient - Recipient address/public key
+ * @param {string|number|bigint} options.amount - Amount to transfer
+ * @param {string} [options.tokenAddress] - Optional token identifier (defaults to base token)
+ * @param {string} [options.network] - Optional network override
+ * @returns {Promise<Object>} Transfer result
+ */
+const transferTokens = async ({
+  seed,
+  recipient,
+  amount,
+  tokenAddress,
+  network,
+}) => {
+  try {
+    if (!seed || typeof seed !== 'string' || seed.trim().length === 0) {
+      const error = new Error('Seed is required to sign transactions');
+      error.status = 400;
+      throw error;
+    }
+
+    if (!recipient || typeof recipient !== 'string' || recipient.trim().length === 0) {
+      const error = new Error('Recipient address is required');
+      error.status = 400;
+      throw error;
+    }
+
+    const sendAmount = normalizeBigIntInput(amount, 'amount');
+    const signerSeed = seed.trim();
+    const sender = KeetaNet.lib.Account.fromSeed(signerSeed, 0);
+
+    // Determine target network (default to 'test' if not specified, matching sample)
+    const targetNetwork = network || DEFAULT_NETWORK;
+
+    // Create client - matching the working example pattern
+    const client = KeetaNet.UserClient.fromNetwork(targetNetwork, sender);
+
+    // Create recipient account from public key string - matching sample pattern
+    const recipientAccount = KeetaNet.lib.Account.fromPublicKeyString(recipient.trim());
+
+    // Initialize builder - matching sample pattern
+    const builder = client.initBuilder();
+
+    // Determine token for transfer (use baseToken if no tokenAddress provided)
+    let tokenForTransfer = client.baseToken;
+    if (tokenAddress && tokenAddress.trim().length > 0) {
+      try {
+        const tokenAccount = KeetaNet.lib.Account.fromPublicKeyString(tokenAddress.trim());
+        if (tokenAccount.keyType !== KeetaNet.lib.Account.AccountKeyAlgorithm.TOKEN) {
+          const error = new Error('Provided token address is not a valid token identifier');
+          error.status = 400;
+          throw error;
+        }
+        tokenForTransfer = tokenAccount;
+      } catch (err) {
+        const error = new Error('Token address is invalid');
+        error.status = 400;
+        throw error;
+      }
+    }
+
+    // Send tokens - matching the working example pattern
+    builder.send(recipientAccount, sendAmount, tokenForTransfer);
+
+    // Compute builder blocks (optional but recommended) - matching sample pattern
+    const computed = await client.computeBuilderBlocks(builder);
+
+    // Publish to network - matching sample pattern
+    const publishResult = await client.publishBuilder(builder);
+
+    // Extract token public key for response
+    const tokenPublicKey = tokenForTransfer.publicKeyString?.toString?.()
+      || tokenForTransfer.publicKeyString?.get?.()
+      || null;
+
+    // Serialize the response to convert any BigInt values to strings
+    const response = {
+      recipient: recipientAccount.publicKeyString?.toString?.() || recipient.trim(),
+      amount: sendAmount.toString(),
+      tokenAddress: tokenPublicKey,
+      blocks: computed?.blocks || [],
+      publish: publishResult,
+    };
+
+    // Recursively serialize all BigInt values to strings for JSON compatibility
+    return serializeBigInt(response);
+  } catch (error) {
+    const normalized = normalizeTransferError(error);
+    logger.error({ error }, 'Error transferring tokens');
 
     const httpError = new Error(normalized.message);
     httpError.status = normalized.status;
@@ -547,5 +706,6 @@ module.exports = {
   getAccountBalance,
   getAccountInfo,
   createToken,
+  transferTokens,
 };
 
